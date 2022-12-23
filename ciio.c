@@ -7,9 +7,9 @@
 #include <signal.h>
 #include <fftw3.h>
 #include "spdetect.h"
-#define USAGE_MSG "Usage: ciio [<arguments>]\n\n--help\t\tUsage message\n--freq\t\tTuner center frequency\n--rate\t\tSampling rate\n-r\t\tReceive JSON data\n-s </dev/ttyX>\tSet Serial device\n"
+#define USAGE_MSG "Usage: ciio [<arguments>]\n\n--help\t\tUsage message\n--freq\t\tTuner center frequency\n--rate\t\tSampling rate\n--uri\t\tDevice uri string\n-s </dev/ttyX>\tSet Serial device\n"
 #define RECEIVER_RATE 16384
-#define PLOT_HISTORY_AVERAGE 10
+#define PLOT_HISTORY_AVERAGE 1000
 #define DEVICE_URI "ip:172.16.0.1"
 
 FILE *gnuplot_pipe;
@@ -35,6 +35,9 @@ void get_iq_amplitude(struct iq_sample *samples, double *samples_pd, int fft_bin
 	double SAMPLE_times_RECEIVER = ((double)sampling_rate * (double)fft_bins);
 
 	for(i = 0; i < fft_bins; i++) {
+		/*if(samples[i].i == 0 && samples[i].q == 0) {
+			printf("get_iq_amplitude i = %d\n", i);
+		}*/
 		samples_pd[i] = 10*log10((samples[i].i * samples[i].i + samples[i].q * samples[i].q) / SAMPLE_times_RECEIVER);
 	}
 }
@@ -43,7 +46,15 @@ void average_power_time(double *samples_pd, double *averaged_samples_pd, int fft
 	int i;
 
 	for(i = 0; i < fft_bins; i++) {
+		/*avoid averaging faulty -inf values, you may adjust -200 lower noise floor*/
+		if(samples_pd[i] < -200) {
+			printf("found %d %f\n", i, samples_pd[i]);
+			continue;
+		}
 		averaged_samples_pd[i] = ((hist - 1) * averaged_samples_pd[i] / hist) + (samples_pd[i] / hist);
+				/*if(averaged_samples_pd[i] < -100) {
+			printf(" %d found: %f, %f\n", i, averaged_samples_pd[i], samples_pd[i]);
+		}*/
 	}
 }
 
@@ -65,9 +76,11 @@ void fft_library(struct iq_sample * restrict samples_fd, struct iq_sample * rest
 	
 	//save result and transpose vector
 	for(i = 0; i < vector_size; i++) {
-		samples_fd[vector_size - i].q = out[i][0];
-		samples_fd[vector_size - i].i = out[i][1];
+		samples_fd[vector_size - i - 1].q = out[i][0];
+		samples_fd[vector_size - i - 1].i = out[i][1];
 	}
+	
+	//printf("fft_library, i = %f, q = %f\n", out[16383][0], out[16383][0]);
 	
 	fftw_destroy_plan(p);
 	fftw_free(in);
@@ -96,27 +109,20 @@ void fft(struct iq_sample * restrict samples_fd, struct iq_sample * restrict sam
 
 void fft_shift(struct iq_sample *samples_fd, struct iq_sample *samples_fd_shifted, int nof_samples) {
 	int i;
-	
+	//printf("fft_shift, i = %d, q = %d\n", samples_fd[0].i, samples_fd[0].q);
 	for(i = 0; i < nof_samples / 2; i++) {
 		samples_fd_shifted[(nof_samples / 2) + i] = samples_fd[i];
 	}
 	for(i = nof_samples / 2; i < nof_samples; i++) {
 		samples_fd_shifted[i - (nof_samples / 2)] = samples_fd[i];
 	}
+	//printf("fft_shift, 2 i = %d, q = %d\n", samples_fd_shifted[8192].i, samples_fd_shifted[8192].q);
 }
 
 void plot_psd(double *samples_pd, int fft_bins, FILE *gnuplot, double sampling_rate) {
 	int i;
 
-	fprintf(gnuplot, "set title \'Power Spectral Density\'\n");
-	fprintf(gnuplot, "set terminal qt size 1280,720\n");
-	fprintf(gnuplot, "set grid\n");
-	fprintf(gnuplot, "set xlabel \'Frequency (Hz)\'\n");
-	fprintf(gnuplot, "set ylabel \'Magnitude (dB)\'\n");
-	fprintf(gnuplot, "set lt 1 lc 4\n");
-	fprintf(gnuplot, "set yrange [-100:0]\n");
-	fprintf(gnuplot, "set xrange [%d:%d]\n", (int) (-sampling_rate / 2), (int) (sampling_rate / 2));
-	fprintf(gnuplot, "plot '-'\n");
+	fprintf(gnuplot_pipe, "plot '-'\n");
 	for (i = 0; i < fft_bins; i++) {
 		fprintf(gnuplot, "%d %g\n", (int) (i * (sampling_rate / fft_bins) - sampling_rate / 2), samples_pd[i]);
 	}
@@ -136,6 +142,14 @@ int receive(struct iio_context *ctx, double sampling_rate) {
 	
 	//redirect output to /dev/null to avoid spamming terminal when exiting ciio
 	gnuplot_pipe = popen("gnuplot -persist > /dev/null 2>&1", "w");
+	fprintf(gnuplot_pipe, "set title \'Power Spectral Density\'\n");
+	fprintf(gnuplot_pipe, "set terminal qt size 1280,720\n");
+	fprintf(gnuplot_pipe, "set grid\n");
+	fprintf(gnuplot_pipe, "set xlabel \'Frequency (Hz)\'\n");
+	fprintf(gnuplot_pipe, "set ylabel \'Magnitude (dB)\'\n");
+	fprintf(gnuplot_pipe, "set lt 1 lc 4\n");
+	fprintf(gnuplot_pipe, "set yrange [-100:0]\n");
+	fprintf(gnuplot_pipe, "set xrange [%d:%d]\n", (int) (-sampling_rate / 2), (int) (sampling_rate / 2));
 	
 	samples_td = (iq_sampleT *) malloc(RECEIVER_RATE * sizeof(iq_sampleT));
 	samples_fd = (iq_sampleT *) malloc(RECEIVER_RATE * sizeof(iq_sampleT));
@@ -145,6 +159,7 @@ int receive(struct iio_context *ctx, double sampling_rate) {
 	for(i = 0; i < RECEIVER_RATE; i++) {
 		averaged_samples_pd[i] = -100;
 	}
+	i = 0;
 
 	dev = iio_context_find_device(ctx, "cf-ad9361-lpc");
 
@@ -187,6 +202,12 @@ int receive(struct iio_context *ctx, double sampling_rate) {
 		average_power_time(samples_pd, averaged_samples_pd, RECEIVER_RATE, PLOT_HISTORY_AVERAGE);
 		if(plot) {
 			plot_psd(averaged_samples_pd, RECEIVER_RATE, gnuplot_pipe, sampling_rate);
+		} else if(sense) {
+			i++;
+			if(i == 20) {
+				i = 0;
+				spectrum_monitor(averaged_samples_pd, RECEIVER_RATE, sampling_rate / RECEIVER_RATE, sampling_rate, gnuplot_pipe);
+			}
 		}
 		
 		clock_gettime(CLOCK_MONOTONIC_RAW, &tv2);
@@ -209,6 +230,9 @@ int main(int argc, char **argv) {
 	struct iio_device *phy;
 	int i;
 	double center_frequency = 0, sampling_rate = 0;
+	char user_device_uri[256];
+	
+	strcpy(user_device_uri, DEVICE_URI);
 	
 	if(argc < 2) {
 		printf("Usage: ./ciio --help\n");
@@ -226,7 +250,9 @@ int main(int argc, char **argv) {
 			plot = true;
 		} else if(strncmp(argv[i], "--sense", 7) == 0) {
 			sense = true;
-			return 0;
+		} else if((strncmp(argv[i], "--uri", 5) == 0) && (argc - 1 > i)) {
+			strcpy(user_device_uri, argv[i + 1]);
+			i++;
 		} else if(strncmp(argv[i], "--help", 6) == 0) {
 			printf("%s\n", USAGE_MSG);
 			return 0;
@@ -236,8 +262,12 @@ int main(int argc, char **argv) {
 		}
 	}
 	
-	ctx = iio_create_context_from_uri(DEVICE_URI);
+	ctx = iio_create_context_from_uri(user_device_uri);
 	printf("ctx = %p\n", ctx);
+	if(ctx == NULL) {
+		printf("Error opening device at %s\n", user_device_uri);
+		return 0;
+	}
 
 	phy = iio_context_find_device(ctx, "ad9361-phy");
 	printf("phy = %p\n", phy);

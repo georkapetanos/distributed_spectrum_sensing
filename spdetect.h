@@ -8,6 +8,7 @@ typedef struct rx_dtc{
     double max_snr;
 } RX_DTC;
 
-void spectrum_monitor(double *samples, int vector_size, double fft_bin_size);
+void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, double sampling_rate, FILE *gnuplot);
+double average_power(double *samples, int vector_size);
 
 #endif
