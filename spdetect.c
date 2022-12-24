@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "spdetect.h"
+#include "mqtt.h"
 #define AVG_STEP 16
 #define MIN_SNR 1
 
@@ -8,6 +9,7 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 	double avg_power = average_power(samples, vector_size);
 	double avg_local, possible_signal_power = 0;
 	int i, j, k, start_freq = -1, end_freq = -1;
+	char payload[128];
 	
 	printf("average power = %f\n", avg_power);
 	fprintf(gnuplot, "plot '-'\n");
@@ -33,9 +35,11 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 		} else {
 			if(end_freq != -1) {
 				//end possible signal here
-				printf("Possible signal from %g to %g, ", (start_freq * fft_bin_size - sampling_rate / 2), (end_freq * fft_bin_size - sampling_rate / 2));
+				printf("Possible signal from %10.3e to %10.3e, ", (start_freq * fft_bin_size - sampling_rate / 2), (end_freq * fft_bin_size - sampling_rate / 2));
 				fprintf(gnuplot, "%d %g\n", (int) (start_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
 				fprintf(gnuplot, "%d %g\n", (int) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
+				sprintf(payload, "%10.3e %10.3e %6g", (double) (start_freq * fft_bin_size - sampling_rate / 2), (double) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
+				publish_message(payload, 28);
 				start_freq = -1;
 				end_freq = -1;
 				possible_signal_power = 0;

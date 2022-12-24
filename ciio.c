@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <fftw3.h>
 #include "spdetect.h"
+#include "mqtt.h"
 #define USAGE_MSG "Usage: ciio [<arguments>]\n\n--help\t\tUsage message\n--freq\t\tTuner center frequency\n--rate\t\tSampling rate\n--uri\t\tDevice uri string\n-s </dev/ttyX>\tSet Serial device\n"
 #define RECEIVER_RATE 16384
 #define PLOT_HISTORY_AVERAGE 1000
@@ -48,7 +49,7 @@ void average_power_time(double *samples_pd, double *averaged_samples_pd, int fft
 	for(i = 0; i < fft_bins; i++) {
 		/*avoid averaging faulty -inf values, you may adjust -200 lower noise floor*/
 		if(samples_pd[i] < -200) {
-			printf("found %d %f\n", i, samples_pd[i]);
+			//printf("found %d %f\n", i, samples_pd[i]);
 			continue;
 		}
 		averaged_samples_pd[i] = ((hist - 1) * averaged_samples_pd[i] / hist) + (samples_pd[i] / hist);
@@ -130,7 +131,7 @@ void plot_psd(double *samples_pd, int fft_bins, FILE *gnuplot, double sampling_r
 	fflush(gnuplot);
 }
 
-int receive(struct iio_context *ctx, double sampling_rate) {
+int receive(struct iio_context *ctx, double sampling_rate, int plot_history_average) {
 	struct iio_device *dev;
 	struct iio_channel *rx0_i, *rx0_q;
 	long long int sample_counter = 0;
@@ -199,21 +200,21 @@ int receive(struct iio_context *ctx, double sampling_rate) {
 		fft_library(samples_fd, samples_td, RECEIVER_RATE);
 		fft_shift(samples_fd, samples_fd_shifted, RECEIVER_RATE);
 		get_iq_amplitude(samples_fd_shifted, samples_pd, RECEIVER_RATE, sampling_rate);
-		average_power_time(samples_pd, averaged_samples_pd, RECEIVER_RATE, PLOT_HISTORY_AVERAGE);
+		average_power_time(samples_pd, averaged_samples_pd, RECEIVER_RATE, plot_history_average);
 		if(plot) {
 			plot_psd(averaged_samples_pd, RECEIVER_RATE, gnuplot_pipe, sampling_rate);
 		} else if(sense) {
 			i++;
-			if(i == 20) {
+			if(i == 6000) {
 				i = 0;
 				spectrum_monitor(averaged_samples_pd, RECEIVER_RATE, sampling_rate / RECEIVER_RATE, sampling_rate, gnuplot_pipe);
 			}
 		}
 		
 		clock_gettime(CLOCK_MONOTONIC_RAW, &tv2);
-		printf ("Total CPU time = %.5g seconds.\n",
+		/*printf ("Total CPU time = %.5g seconds.\n",
 			(double) (tv2.tv_nsec - tv1.tv_nsec) / 1000000000.0 +
-			(double) (tv2.tv_sec - tv1.tv_sec));
+			(double) (tv2.tv_sec - tv1.tv_sec));*/
 		sample_counter = 0;
 	}
 
@@ -228,7 +229,7 @@ int receive(struct iio_context *ctx, double sampling_rate) {
 
 int main(int argc, char **argv) {
 	struct iio_device *phy;
-	int i;
+	int i, plot_history_average = 0;
 	double center_frequency = 0, sampling_rate = 0;
 	char user_device_uri[256];
 	
@@ -248,7 +249,10 @@ int main(int argc, char **argv) {
 			i++;
 		} else if(strncmp(argv[i], "--plot", 6) == 0) {
 			plot = true;
+			plot_history_average = 10;
 		} else if(strncmp(argv[i], "--sense", 7) == 0) {
+			plot_history_average = 1000;
+			mqtt_setup();
 			sense = true;
 		} else if((strncmp(argv[i], "--uri", 5) == 0) && (argc - 1 > i)) {
 			strcpy(user_device_uri, argv[i + 1]);
@@ -289,7 +293,7 @@ int main(int argc, char **argv) {
 		iio_device_find_channel(phy, "voltage0", false),
 		"hardwaregain",
 		45.000000);
-	receive(ctx, sampling_rate);
+	receive(ctx, sampling_rate, plot_history_average);
 
 	iio_context_destroy(ctx);
 
