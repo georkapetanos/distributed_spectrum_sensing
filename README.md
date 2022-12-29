@@ -12,8 +12,8 @@
 
 ### Usage
 
-Relay information to MQTT server, center frequency 100.2 MHz, 5 Msamples/s
-./ciio --freq 1002e5 --rate 5e6 --uri ip:172.16.1.2 --sense
+* Relay information to MQTT server, center frequency 100.2 MHz, 5 Msamples/s
+* ./ciio --freq 1002e5 --rate 5e6 --uri ip:172.16.1.2 --sense
 
-Create a plot using fft bins
-./ciio --freq 1002e5 --rate 5e6 --uri ip:172.16.1.2 --plot
+* Create a plot using fft bins
+* ./ciio --freq 1002e5 --rate 5e6 --uri ip:172.16.1.2 --plot
