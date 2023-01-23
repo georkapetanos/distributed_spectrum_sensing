@@ -12,12 +12,17 @@
 #define RECEIVER_RATE 16384
 #define PLOT_HISTORY_AVERAGE 1000
 #define DEVICE_URI "ip:172.16.0.1"
+#define CUSENSE_SEGMENTS 8
+#define DEFAULT_GAIN 45.0
 
 FILE *gnuplot_pipe;
+struct iio_device *phy;
 struct iio_context *ctx;
 struct iio_buffer *rxbuf;
 bool plot = false;
 bool sense = false;
+bool cusense = false;
+bool cuplot = false;
 
 typedef struct iq_sample{
 	int16_t i;
@@ -131,15 +136,15 @@ void plot_psd(double *samples_pd, int fft_bins, FILE *gnuplot, double sampling_r
 	fflush(gnuplot);
 }
 
-int receive(struct iio_context *ctx, double sampling_rate, int plot_history_average) {
+int receive(struct iio_context *ctx, double center_frequency, double sampling_rate, int plot_history_average) {
 	struct iio_device *dev;
 	struct iio_channel *rx0_i, *rx0_q;
 	long long int sample_counter = 0;
 	int16_t i_host, q_host;
 	struct iq_sample *samples_td, *samples_fd, *samples_fd_shifted;
-	double *samples_pd, *averaged_samples_pd;
+	double *samples_pd, *averaged_samples_pd, *concatenated_samples_pd = NULL;
 	struct timespec  tv1, tv2;
-	int i;
+	int i, j, k;
 	
 	//redirect output to /dev/null to avoid spamming terminal when exiting ciio
 	gnuplot_pipe = popen("gnuplot -persist > /dev/null 2>&1", "w");
@@ -150,7 +155,11 @@ int receive(struct iio_context *ctx, double sampling_rate, int plot_history_aver
 	fprintf(gnuplot_pipe, "set ylabel \'Magnitude (dB)\'\n");
 	fprintf(gnuplot_pipe, "set lt 1 lc 4\n");
 	fprintf(gnuplot_pipe, "set yrange [-100:0]\n");
-	fprintf(gnuplot_pipe, "set xrange [%d:%d]\n", (int) (-sampling_rate / 2), (int) (sampling_rate / 2));
+	if(cusense || cuplot) {
+		fprintf(gnuplot_pipe, "set xrange [%d:%d]\n", (int) (-sampling_rate * CUSENSE_SEGMENTS / 2), (int) (sampling_rate * CUSENSE_SEGMENTS / 2));
+	} else {
+		fprintf(gnuplot_pipe, "set xrange [%d:%d]\n", (int) (-sampling_rate / 2), (int) (sampling_rate / 2));
+	}
 	
 	samples_td = (iq_sampleT *) malloc(RECEIVER_RATE * sizeof(iq_sampleT));
 	samples_fd = (iq_sampleT *) malloc(RECEIVER_RATE * sizeof(iq_sampleT));
@@ -158,9 +167,14 @@ int receive(struct iio_context *ctx, double sampling_rate, int plot_history_aver
 	samples_pd = (double *) malloc(RECEIVER_RATE * sizeof(double));
 	averaged_samples_pd = (double *) malloc(RECEIVER_RATE * sizeof(double));
 	for(i = 0; i < RECEIVER_RATE; i++) {
-		averaged_samples_pd[i] = -100;
+		averaged_samples_pd[i] = -60;
 	}
 	i = 0;
+	k = 0;
+	
+	if(cusense || cuplot) {
+		concatenated_samples_pd = (double *) malloc(RECEIVER_RATE * CUSENSE_SEGMENTS * sizeof(double));
+	}
 
 	dev = iio_context_find_device(ctx, "cf-ad9361-lpc");
 
@@ -207,7 +221,34 @@ int receive(struct iio_context *ctx, double sampling_rate, int plot_history_aver
 			i++;
 			if(i == 6000) {
 				i = 0;
-				spectrum_monitor(averaged_samples_pd, RECEIVER_RATE, sampling_rate / RECEIVER_RATE, sampling_rate, gnuplot_pipe);
+				publish_station_info(center_frequency, sampling_rate);
+				spectrum_monitor(averaged_samples_pd, RECEIVER_RATE, sampling_rate / RECEIVER_RATE, sampling_rate, gnuplot_pipe, 0);
+			}
+		} else if(cusense || cuplot) {
+			i++;
+			if(i == 100) {
+				i = 0;
+				for(j = 0; j < RECEIVER_RATE; j++) {
+					concatenated_samples_pd[k * RECEIVER_RATE + j] = averaged_samples_pd[j];
+				}
+				k++;
+				if(k == CUSENSE_SEGMENTS) {
+					k = 0;
+					if(cuplot) {
+						plot_psd(concatenated_samples_pd, RECEIVER_RATE * CUSENSE_SEGMENTS, gnuplot_pipe, sampling_rate * CUSENSE_SEGMENTS);
+					} else if(cusense) {
+						publish_station_info(center_frequency, sampling_rate * CUSENSE_SEGMENTS);
+						spectrum_monitor(concatenated_samples_pd, RECEIVER_RATE * CUSENSE_SEGMENTS, sampling_rate * CUSENSE_SEGMENTS / RECEIVER_RATE * CUSENSE_SEGMENTS, sampling_rate * CUSENSE_SEGMENTS, gnuplot_pipe, 1);
+					}
+					printf("Changing center frequency to %lf\n", center_frequency);
+					iio_channel_attr_write_longlong(iio_device_find_channel(phy, "altvoltage0", true), "frequency", center_frequency);
+						for(j = 0; j < RECEIVER_RATE; j++) {
+							averaged_samples_pd[j] = -60;
+						}
+				} else {
+					printf("Changing center frequency to %lf\n", center_frequency + k * sampling_rate);
+					iio_channel_attr_write_longlong(iio_device_find_channel(phy, "altvoltage0", true), "frequency", center_frequency + k * sampling_rate);
+				}
 			}
 		}
 		
@@ -228,9 +269,8 @@ int receive(struct iio_context *ctx, double sampling_rate, int plot_history_aver
 }
 
 int main(int argc, char **argv) {
-	struct iio_device *phy;
 	int i, plot_history_average = 0;
-	double center_frequency = 0, sampling_rate = 0;
+	double center_frequency = 0, sampling_rate = 0, gain = DEFAULT_GAIN;
 	char user_device_uri[256];
 	
 	strcpy(user_device_uri, DEVICE_URI);
@@ -245,7 +285,7 @@ int main(int argc, char **argv) {
 			i++;
 		} else if((strncmp(argv[i], "--rate", 6) == 0) && (argc - 1 > i)) {
 			sampling_rate = atof(argv[i + 1]);
-			printf("rate=%f\n", sampling_rate);
+			//printf("rate=%f\n", sampling_rate);
 			i++;
 		} else if(strncmp(argv[i], "--plot", 6) == 0) {
 			plot = true;
@@ -254,6 +294,16 @@ int main(int argc, char **argv) {
 			plot_history_average = 1000;
 			mqtt_setup();
 			sense = true;
+		} else if(strncmp(argv[i], "--cusense", 9) == 0) {
+			plot_history_average = 10;
+			cusense = true;
+			mqtt_setup();
+		} else if(strncmp(argv[i], "--cuplot", 8) == 0) {
+			plot_history_average = 10;
+			cuplot = true;
+		} else if((strncmp(argv[i], "--gain", 6) == 0) && (argc - 1 > i)) {
+			gain = atof(argv[i + 1]);
+			i++;
 		} else if((strncmp(argv[i], "--uri", 5) == 0) && (argc - 1 > i)) {
 			strcpy(user_device_uri, argv[i + 1]);
 			i++;
@@ -292,8 +342,8 @@ int main(int argc, char **argv) {
 	iio_channel_attr_write_longlong(
 		iio_device_find_channel(phy, "voltage0", false),
 		"hardwaregain",
-		45.000000);
-	receive(ctx, sampling_rate, plot_history_average);
+		gain);
+	receive(ctx, center_frequency, sampling_rate, plot_history_average);
 
 	iio_context_destroy(ctx);
 

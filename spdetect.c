@@ -5,7 +5,7 @@
 #define AVG_STEP 16
 #define MIN_SNR 1
 
-void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, double sampling_rate, FILE *gnuplot) {
+void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, double sampling_rate, FILE *gnuplot, int cumulative) {
 	double avg_power = average_power(samples, vector_size);
 	double avg_local, possible_signal_power = 0;
 	int i, j, k, start_freq = -1, end_freq = -1;
@@ -36,10 +36,14 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 			if(end_freq != -1) {
 				//end possible signal here
 				printf("Possible signal from %10.3e to %10.3e, ", (start_freq * fft_bin_size - sampling_rate / 2), (end_freq * fft_bin_size - sampling_rate / 2));
-				fprintf(gnuplot, "%d %g\n", (int) (start_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
-				fprintf(gnuplot, "%d %g\n", (int) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
-				sprintf(payload, "%10.3e %10.3e %6g", (double) (start_freq * fft_bin_size - sampling_rate / 2), (double) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
-				publish_message(payload, 28);
+				//if(cumulative == 0) {
+					fprintf(gnuplot, "%d %g\n", (int) (start_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
+					fprintf(gnuplot, "%d %g\n", (int) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
+					//} else if(cumulative == 1) {
+				
+				//}
+				sprintf(payload, "%10.3e,%10.3e,%6g", (double) (start_freq * fft_bin_size - sampling_rate / 2), (double) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
+				publish_message(payload, 28, 1);
 				start_freq = -1;
 				end_freq = -1;
 				possible_signal_power = 0;
