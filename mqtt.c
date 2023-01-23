@@ -7,6 +7,7 @@
 #include <sqlite3.h> 
 #define MQTT_TOPIC "spectrum_sense"
 #define CONFIGURATION_FILE "./config.yaml"
+#define DB_FILE "./dss.db"
 #define IMPORT_LINE_SIZE 256
 #define MAX_STATIONS 16
 
@@ -59,6 +60,22 @@ double return_station(char *station_id) {
 	}
 	
 	return -1;
+}
+
+double check_station(char *station_id, double center_freq) {
+	int i;
+	
+	for(i = 0; i < number_of_stations; i++) {
+		if((strncmp(stations_list[i].id, station_id, 8) == 0) && (stations_list[i].center_freq == center_freq)) {
+			return stations_list[i].center_freq;
+		}
+	}
+	
+	return -1;
+}
+
+void update_station() {
+
 }
 
 static int callback(void *NotUsed, int argc, char **argv, char **azColName) {
@@ -196,12 +213,12 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 	char *zErrMsg = 0;
 	int rc;
 	
-	sqlite3_open("test.db", &db);
+	sqlite3_open(DB_FILE, &db);
 	
 	message = strdup((char *)msg->payload);
 	token = strtok(message, ",");
 	
-	if(strncmp(token, "INFO", 4) == 0) {
+	if(strncmp(token, "INFO", 4) == 0) { //station info message
 		token = strtok(NULL, ",");
 		strcpy(id, token);
 		token = strtok(NULL, ",");
@@ -212,18 +229,14 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 		center_freq = atof(token);
 		token = strtok(NULL, ",");
 		sample_rate = atof(token);
-		printf("Station_id=%s, x=%f, y=%f, center_frequency=%.2f Hz, sample_rate=%.2f Hz\n", id, coord_x, coord_y, center_freq, sample_rate);
-		if(return_station(id) == -1) {
+		printf("\n\x1B[32mStation_id=%s, x=%f, y=%f, center_frequency=%.2f Hz, sample_rate=%.2f Hz\n", id, coord_x, coord_y, center_freq, sample_rate);
+		if(check_station(id, center_freq) == -1) { //check if station has changed center frequency
 			insert_station(id, center_freq);
-			printf("number of stations = %d\n", number_of_stations);
 		}
+		printf("Number of stations = %d\x1B[0m\n", number_of_stations);
 	} else {
-		//printf("%s %d %s\n", msg->topic, msg->qos, (char *)msg->payload);
-		//current token is station id
-		//printf("id = %s\n", token);
 		strcpy(id, token);
 		center_freq = return_station(token);
-		//printf("center_freq = %.2f\n", center_freq);
 		token = strtok(NULL, ",");
 		left_bound = atof(token);
 		token = strtok(NULL, ",");
@@ -231,7 +244,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 		token = strtok(NULL, ",");
 		dB = atof(token);
 		bandwidth = abs(left_bound - right_bound);
-		printf("Rx @ %.2f Hz, Bandwidth = %.2f Hz, %.2f dB from %s\n", center_freq + left_bound + bandwidth / 2, bandwidth, dB, id);
+		printf("\nRx @ %.2f Hz, Bandwidth = %.2f Hz, %.2f dB from %s\n", center_freq + left_bound + bandwidth / 2, bandwidth, dB, id);
 		strcpy(sql_statement, "INSERT INTO DETECTIONS (ID,IDSTATION,FREQUENCY,BANDWIDTH,DB) VALUES (");
 		sprintf(temp_sql, "%d, \'", sql_id);
 		strcat(sql_statement, temp_sql);
@@ -243,7 +256,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 		strcat(sql_statement, temp_sql);
 		sprintf(temp_sql, "%.2f);", dB);
 		strcat(sql_statement, temp_sql);
-		printf("\n%s\n\n", sql_statement);
+		printf("%s\n", sql_statement);
 		/* Execute SQL statement */
 		rc = sqlite3_exec(db, sql_statement, callback, 0, &zErrMsg);
 	   
@@ -251,7 +264,7 @@ void on_message(struct mosquitto *mosq, void *obj, const struct mosquitto_messag
 			fprintf(stderr, "SQL error: %s\n", zErrMsg);
 			sqlite3_free(zErrMsg);
 		} else {
-			fprintf(stdout, "Records created successfully\n");
+			fprintf(stdout, "Records created successfully.\n");
 		}
 		sql_id++;
 	}
@@ -317,13 +330,13 @@ int mqtt_setup_receiver() {
 	number_of_stations = 0;
 	sql_id = 0;
 
-	remove("test.db");
-	rc = sqlite3_open("test.db", &db);
+	remove(DB_FILE);
+	rc = sqlite3_open(DB_FILE, &db);
 	if(rc) {
 		fprintf(stderr, "Can't open database: %s\n", sqlite3_errmsg(db));
 		return(0);
 	} else {
-		fprintf(stderr, "Opened database successfully\n");
+		fprintf(stderr, "Opened database successfully.\n");
 	}
 
 	/* Create SQL statement */
@@ -341,7 +354,7 @@ int mqtt_setup_receiver() {
 		fprintf(stderr, "SQL error: %s\n", zErrMsg);
 		sqlite3_free(zErrMsg);
 	} else {
-		fprintf(stdout, "Table created successfully\n");
+		fprintf(stdout, "Table created successfully.\n");
 	}
 
 	mosq = mosquitto_new(NULL, true, NULL);
@@ -383,7 +396,6 @@ int mqtt_setup() {
 	number_of_stations = 0;
 	
 	parse_configuration_file(&parsed_data);
-	//printf("%s, %d, %d, %s, %s, %s\n", parsed_data.hostname, parsed_data.port, parsed_data.keep_alive, parsed_data.username, parsed_data.password, parsed_data.id);
 	
 	mosq = mosquitto_new(NULL, true, NULL);
 	if(mosq == NULL){
@@ -392,7 +404,6 @@ int mqtt_setup() {
 	}
 	
 	mosquitto_connect_callback_set(mosq, on_connect);
-	//mosquitto_subscribe_callback_set(mosq, on_subscribe);
 	mosquitto_publish_callback_set(mosq, on_publish);
 	
 	mosquitto_username_pw_set(mosq, parsed_data.username, parsed_data.password);
@@ -409,8 +420,6 @@ int mqtt_setup() {
 		fprintf(stderr, "Error: %s\n", mosquitto_strerror(rc));
 		return 1;
 	}
-	
-	//publish_message("test_message", 12);
 	
 	return 0;
 }

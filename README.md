@@ -6,9 +6,11 @@
 
 ### Requirements
 
-- libfftw3
-- libmosquitto
-- libiio
+- libfftw3-dev
+- libmosquitto-dev
+- libiio-dev
+- libsqlite3-dev
+- gnuplot
 
 ### Usage
 

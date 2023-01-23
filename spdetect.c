@@ -11,7 +11,7 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 	int i, j, k, start_freq = -1, end_freq = -1;
 	char payload[128];
 	
-	printf("average power = %f\n", avg_power);
+	printf("Average power = %f\n", avg_power);
 	fprintf(gnuplot, "plot '-'\n");
 	for(i = 0; i < vector_size; i+=AVG_STEP) {
 		avg_local = 0;
@@ -35,7 +35,7 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 		} else {
 			if(end_freq != -1) {
 				//end possible signal here
-				printf("Possible signal from %10.3e to %10.3e, ", (start_freq * fft_bin_size - sampling_rate / 2), (end_freq * fft_bin_size - sampling_rate / 2));
+				printf("Rx @ %10.3e to %10.3e, ", (start_freq * fft_bin_size - sampling_rate / 2), (end_freq * fft_bin_size - sampling_rate / 2));
 				//if(cumulative == 0) {
 					fprintf(gnuplot, "%d %g\n", (int) (start_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
 					fprintf(gnuplot, "%d %g\n", (int) (end_freq * fft_bin_size - sampling_rate / 2), possible_signal_power);
@@ -53,7 +53,6 @@ void spectrum_monitor(double *samples, int vector_size, double fft_bin_size, dou
 	fprintf(gnuplot, "e\n");
 	fflush(gnuplot);
 	printf("\n");
-	//sleep(5);
 }
 
 double average_power(double *samples, int vector_size) {
@@ -61,11 +60,8 @@ double average_power(double *samples, int vector_size) {
 	double average_power_reduct = 0;
 	
 	for(i = 0; i < vector_size; i++) {
-		/*if(samples[i] < -100) {
-			printf(" %d found: %f\n", i, samples[i]);
-		}*/
 		average_power_reduct += samples[i];
 	}
-	//printf("%f", average_power_reduct);
+
 	return (average_power_reduct /= vector_size);
 }

@@ -237,7 +237,7 @@ int receive(struct iio_context *ctx, double center_frequency, double sampling_ra
 					if(cuplot) {
 						plot_psd(concatenated_samples_pd, RECEIVER_RATE * CUSENSE_SEGMENTS, gnuplot_pipe, sampling_rate * CUSENSE_SEGMENTS);
 					} else if(cusense) {
-						publish_station_info(center_frequency, sampling_rate * CUSENSE_SEGMENTS);
+						publish_station_info(center_frequency + (sampling_rate * CUSENSE_SEGMENTS / 2) - (sampling_rate / 2), sampling_rate * CUSENSE_SEGMENTS);
 						spectrum_monitor(concatenated_samples_pd, RECEIVER_RATE * CUSENSE_SEGMENTS, sampling_rate * CUSENSE_SEGMENTS / RECEIVER_RATE * CUSENSE_SEGMENTS, sampling_rate * CUSENSE_SEGMENTS, gnuplot_pipe, 1);
 					}
 					printf("Changing center frequency to %lf\n", center_frequency);
